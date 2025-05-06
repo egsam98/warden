@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"warden"
+	"github.com/egsam98/warden"
 )
 
 func main() {

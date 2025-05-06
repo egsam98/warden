@@ -1,4 +1,4 @@
-module warden
+module github.com/egsam98/warden
 
 go 1.23.0
 
