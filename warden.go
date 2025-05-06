@@ -175,7 +175,7 @@ func parseStruct(ctx *Context, method *method, structType *ast.StructType) error
 			Each   map[string]any `toml:"each"`
 		}
 		if _, err := toml.Decode(doc, &defs); err != nil {
-			return errors.Wrapf(err, "decode rule definitions for field %s.%s", ctx.StructName, field.Name)
+			return errors.Wrap(err, "decode rule definitions for field %s.%s", ctx.StructName, field.Name)
 		}
 
 		exprs, err := genRules(ctx, field, defs.Warden)
@@ -223,7 +223,7 @@ func genRules(ctx *Context, field Field, ruleDefs map[string]any) ([]*j.Statemen
 
 		expr, err := rule.Render(ctx, field, props)
 		if err != nil {
-			return nil, errors.Wrapf(err, "%s.%s: %s", ctx.StructName, field.Name, ruleName)
+			return nil, errors.Wrap(err, "%s.%s: %s", ctx.StructName, field.Name, ruleName)
 		}
 
 		exprs = append(exprs, expr)
