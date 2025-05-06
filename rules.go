@@ -1,9 +1,7 @@
 package warden
 
 import (
-	"fmt"
 	"go/types"
-	"strings"
 
 	j "github.com/dave/jennifer/jen"
 	"github.com/egsam98/errors"
@@ -11,20 +9,65 @@ import (
 
 const errorsPkg = "github.com/egsam98/errors"
 
+var rules = map[string]Rule{
+	"required": Required(),
+	"default":  Default(),
+	"url":      URL(),
+	"oneof":    OneOf(),
+	"regex":    Regex(),
+	"length":   Length(),
+	"iso-4217": ISO4217(),
+	"nested":   Nested(),
+	"custom":   Custom(),
+}
+
+var ifaceStringer = ImportStdInterface("fmt", "Stringer")
+var ifaceIsZero = types.NewInterfaceType([]*types.Func{
+	types.NewFunc(
+		0,
+		nil,
+		"IsZero",
+		types.NewSignatureType(nil, nil, nil, nil, types.NewTuple(types.NewVar(0, nil, "", types.Typ[types.Bool])), false),
+	),
+}, nil)
+
+type Rule struct {
+	SkipNil bool
+	Do      func(ctx *Context, field Field, props Properties) (*j.Statement, error)
+}
+
+func (r *Rule) Render(
+	ctx *Context,
+	field Field,
+	props Properties,
+) (*j.Statement, error) {
+	ptr, isPtr := field.Type.(*types.Pointer)
+	if isPtr && r.SkipNil {
+		field.Type = ptr.Elem()
+		field.Deref = true
+	}
+	stmt, err := r.Do(ctx, field, props)
+	if err != nil {
+		return nil, err
+	}
+	if isPtr && r.SkipNil {
+		stmt = j.If(field.Gen(false).Op("!=").Nil()).Block(stmt)
+	}
+	return stmt, nil
+}
+
 func Required() Rule {
 	return Rule{
 		SkipNil: false,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
-			if props.Value == false {
-				return j.Null(), nil, nil
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			if lit, ok := props.Value.(*Lit); ok && lit.any == false {
+				return j.Null(), nil
 			}
-			stmt := j.Block(
-				j.Var().Id("zero").Id(field.Type.String()),
-				j.If(field.Jen()).Op("==").Id("zero").Block(
-					returnErr("required", props),
-				),
-			)
-			return stmt, nil, nil
+			retErr, err := ReturnErr(props, "required")
+			if err != nil {
+				return nil, err
+			}
+			return j.If(ifFieldZero(ctx, field)).Block(retErr), nil
 		},
 	}
 }
@@ -32,37 +75,48 @@ func Required() Rule {
 func Default() Rule {
 	return Rule{
 		SkipNil: false,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
-			f := field.Jen()
-			stmt := j.Block(
-				j.Var().Id("zero").Id(field.Type.String()),
-				j.If(f).Op("==").Id("zero").BlockFunc(func(g *j.Group) {
-					if ptr, ok := field.Type.(*types.Pointer); ok {
-						g.Add(f).Op("=").New(j.Id(ptr.Elem().String()))
-						g.Op("*").Add(f).Op("=").Lit(props.Value)
-						return
-					}
-					g.Add(f).Op("=").Lit(props.Value)
-				}),
-			)
-			return stmt, nil, nil
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			f := field.Gen()
+			return j.If(ifFieldZero(ctx, field)).BlockFunc(func(g *j.Group) {
+				fieldPtr, isFieldPtr := field.Type.(*types.Pointer)
+				_, isValuePtr := props.Value.Type().(*types.Pointer)
+				switch {
+				case isFieldPtr && !isValuePtr:
+					g.Add(f).Op("=").New(j.Id(fieldPtr.Elem().String()))
+					g.Op("*").Add(f).Op("=").Add(props.Value.Gen())
+				case !isFieldPtr && isValuePtr:
+					g.Add(f).Op("=").Op("*").Add(props.Value.Gen())
+				default:
+					g.Add(f).Op("=").Add(props.Value.Gen())
+				}
+			}), nil
 		},
+	}
+}
+
+func ifFieldZero(ctx *Context, field Field) *j.Statement {
+	if _, isPtr := field.Type.(*types.Pointer); !isPtr && Implements(field.Type, ifaceIsZero) {
+		return field.Gen().Dot(ifaceIsZero.Method(0).Name()).Call()
+	} else {
+		return field.Gen().Op("==").Add(ZeroValue(ctx, field.Type))
 	}
 }
 
 func URL() Rule {
 	return Rule{
 		SkipNil: true,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
-			if props.Value == false {
-				return j.Null(), nil, nil
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			if lit, ok := props.Value.(*Lit); ok && lit.any == false {
+				return j.Null(), nil
 			}
 
-			stmt := j.If(j.Id("_").Op(",").Err().Op(":=").Qual("net/url", "Parse").Call(field.JenString())).
-				Op(";").Err().Op("!=").Nil().Block(
-				returnErr("must be URL", props),
-			)
-			return stmt, nil, nil
+			retErr, err := ReturnErr(props, "must be URL")
+			if err != nil {
+				return nil, err
+			}
+			return j.If(j.Id("_").Op(",").Err().Op(":=").Qual("net/url", "Parse").Call(field.GenString())).
+				Op(";").Err().Op("!=").Nil().
+				Block(retErr), nil
 		},
 	}
 }
@@ -70,16 +124,15 @@ func URL() Rule {
 func OneOf() Rule {
 	return Rule{
 		SkipNil: true,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
-			variants, ok := props.Value.([]any)
-			if !ok {
-				return nil, nil, errors.New("value must be array")
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			retErr, err := ReturnErr(props, "must be one of %v", props.Value)
+			if err != nil {
+				return nil, err
 			}
-
-			stmt := j.If(j.Op("!").Qual("slices", "Contains").Call(list(variants, field.Type), field.Jen())).Block(
-				returnErr(fmt.Sprintf("must be one of %v", variants), props),
-			)
-			return stmt, nil, nil
+			return j.If(j.Op("!").
+				Qual("slices", "Contains").
+				Call(props.Value.Gen(), field.Gen())).
+				Block(retErr), nil
 		},
 	}
 }
@@ -87,18 +140,29 @@ func OneOf() Rule {
 func Regex() Rule {
 	return Rule{
 		SkipNil: true,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
-			regex, ok := props.Value.(string)
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			lit, ok := props.Value.(*Lit)
 			if !ok {
-				return nil, nil, errors.New("value must be string")
+				return nil, errors.New("value must be string")
+			}
+			regex, ok := lit.any.(string)
+			if !ok {
+				return nil, errors.New("value must be string")
 			}
 
 			regexID := j.Id("regex" + ctx.StructName + field.Name)
-			static := j.Var().Add(regexID).Op("=").Qual("regexp", "MustCompile").Call(j.Lit(regex))
-			stmt := j.If(j.Op("!").Add(regexID).Dot("MatchString").Call(field.JenString())).Block(
-				returnErr("must match regex "+regex, props),
+			ctx.AddStatic(
+				j.Var().Add(regexID).Op("=").Qual("regexp", "MustCompile").Call(j.Lit(regex)),
 			)
-			return stmt, static, nil
+			retErr, err := ReturnErr(props, "must match regex "+regex)
+			if err != nil {
+				return nil, err
+			}
+			return j.If(j.Op("!").
+				Add(regexID).
+				Dot("MatchString").
+				Call(field.GenString())).
+				Block(retErr), nil
 		},
 	}
 }
@@ -106,47 +170,42 @@ func Regex() Rule {
 func Length() Rule {
 	return Rule{
 		SkipNil: true,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
 			if props.Value != nil {
-				value, ok := props.Value.(int64)
-				if !ok {
-					return nil, nil, errors.New("value must be integer")
+				retErr, err := ReturnErr(props, "must have length: %s", props.Value)
+				if err != nil {
+					return nil, err
 				}
-				stmt := j.If(j.Len(field.Jen()).Op("==").Lit(int(value))).Block(
-					returnErr(fmt.Sprintf("must have length: %v", props.Value), props),
-				)
-				return stmt, nil, nil
+				return j.If(j.Len(field.Gen()).Op("==").Add(props.Value.Gen())).Block(retErr), nil
 			}
 
 			var stmt = j.Null()
 			minimum, hasMin := props.Other["min"]
 			if hasMin {
-				if v, ok := minimum.(int64); ok {
-					minimum = int(v)
+				retErr, err := ReturnErr(props, "must have length %v min", minimum)
+				if err != nil {
+					return nil, err
 				}
 				stmt.Add(
-					j.If(j.Len(field.Jen()).Op("<").Lit(minimum)).Block(
-						returnErr(fmt.Sprintf("must have length %d min", minimum), props),
-					),
+					j.If(j.Len(field.Gen()).Op("<").Add(minimum.Gen())).Block(retErr),
 				)
 			}
 			maximum, hasMax := props.Other["max"]
 			if hasMax {
-				if v, ok := maximum.(int64); ok {
-					maximum = int(v)
-				}
 				if hasMin {
 					stmt.Line()
 				}
-				stmt.If(j.Len(field.Jen()).Op(">").Lit(maximum)).Block(
-					returnErr(fmt.Sprintf("must have length %d max", maximum), props),
-				)
+				retErr, err := ReturnErr(props, "must have length %v max", maximum)
+				if err != nil {
+					return nil, err
+				}
+				stmt.If(j.Len(field.Gen()).Op(">").Add(maximum.Gen())).Block(retErr)
 			}
 
 			if !hasMin && !hasMax {
-				return nil, nil, errors.New("specify either value or min/max pair")
+				return nil, errors.New("specify either value or min/max pair")
 			}
-			return stmt, nil, nil
+			return stmt, nil
 		},
 	}
 }
@@ -154,19 +213,21 @@ func Length() Rule {
 func ISO4217() Rule {
 	return Rule{
 		SkipNil: true,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
-			if props.Value == false {
-				return j.Null(), nil, nil
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			if lit, ok := props.Value.(*Lit); ok && lit.any == false {
+				return j.Null(), nil
+			}
+			retErr, err := ReturnErr(props, "must be ISO4217 currency")
+			if err != nil {
+				return nil, err
 			}
 			stmt := j.If(
 				j.Id("code, _").
 					Op(":=").
 					Qual("github.com/rmg/iso4217", "ByName").
-					Call(field.JenString()).Op(";").Id("code").Op("==").Lit(0),
-			).Block(
-				returnErr("must be ISO4217 currency", props),
-			)
-			return stmt, nil, nil
+					Call(field.GenString()).Op(";").Id("code").Op("==").Lit(0),
+			).Block(retErr)
+			return stmt, nil
 		},
 	}
 }
@@ -174,13 +235,13 @@ func ISO4217() Rule {
 func Nested() Rule {
 	return Rule{
 		SkipNil: true,
-		Do: func(ctx *Context, field Field, props Properties) (stmt *j.Statement, staticVars *j.Statement, err error) {
-			if props.Value == false {
-				return j.Null(), nil, nil
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			if lit, ok := props.Value.(*Lit); ok && lit.any == false {
+				return j.Null(), nil
 			}
 			return j.If(
-				j.Err().Op(":=").Add(field.Jen(false)).Dot("Validate").Call().Op(";").Err().Op("!=").Nil(),
-			).Block(j.Return(j.Err())), nil, nil
+				j.Err().Op(":=").Add(field.Gen(false)).Dot("Validate").Call().Op(";").Err().Op("!=").Nil(),
+			).Block(j.Return(j.Err())), nil
 		},
 	}
 }
@@ -188,128 +249,42 @@ func Nested() Rule {
 func Custom() Rule {
 	return Rule{
 		SkipNil: true,
-		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, *j.Statement, error) {
-			funcDef, ok := props.Value.(string)
+		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
+			funcId, ok := props.Value.(*Id)
 			if !ok {
-				return nil, nil, errors.New("value must be string")
+				return nil, errors.New("value must be identifier")
+			}
+			funcType, ok := funcId.Object.(*types.Func)
+			if !ok {
+				return nil, errors.New("value must be func identifier")
 			}
 
 			var stmt *j.Statement
-			if props.Other["method"] == true {
-				stmt = field.Jen().Dot(funcDef).Call()
+			sig := funcType.Signature()
+			if sig.Recv() != nil {
+				stmt = field.Gen().Dot(funcId.Name()).Call()
 			} else {
-				obj, err := ctx.FindObject(funcDef)
-				if err != nil {
-					return nil, nil, err
-				}
-				f, ok := obj.(*types.Func)
-				if !ok {
-					return nil, nil, errors.Errorf("definition %s is not function", funcDef)
-				}
-				firstParam := f.Signature().Params().At(0)
+				firstParam := sig.Params().At(0)
 				if firstParam == nil {
-					return nil, nil, errors.Errorf("function %s has no parameters", funcDef)
+					return nil, errors.Errorf("function %s has no parameters", funcType)
 				}
-				stmt = qual(funcDef).CallFunc(func(g *j.Group) {
+
+				stmt = funcId.Gen().CallFunc(func(g *j.Group) {
 					_, isPtr := firstParam.Type().(*types.Pointer)
 					switch {
 					case field.Deref && isPtr, !field.Deref && !isPtr:
-						g.Add(field.Jen(false))
+						g.Add(field.Gen(false))
 					case !field.Deref && isPtr:
-						g.Op("&").Add(field.Jen(false))
+						g.Op("&").Add(field.Gen(false))
 					default:
-						g.Add(field.Jen())
+						g.Add(field.Gen())
 					}
 				})
 			}
 
 			return j.If(
 				j.Err().Op(":=").Add(stmt).Op(";").Err().Op("!=").Nil(),
-			).Block(j.Return(j.Err())), nil, nil
+			).Block(j.Return(j.Err())), nil
 		},
 	}
-}
-
-func list(slice []any, typ types.Type) *j.Statement {
-	values := make([]j.Code, len(slice))
-	for i, elem := range slice {
-		values[i] = j.Lit(elem)
-	}
-	return j.Index().Id(typ.String()).Values(values...)
-}
-
-type Field struct {
-	Self, Deref bool
-	Name        string
-	Type        types.Type
-	Object      types.Object
-}
-
-func (f *Field) Jen(deref ...bool) *j.Statement {
-	_deref := true
-	if len(deref) > 0 {
-		_deref = deref[0]
-	}
-
-	var id *j.Statement
-	if f.Self {
-		id = j.Id("self." + f.Name)
-	} else {
-		id = j.Id(f.Name)
-	}
-	if f.Deref && _deref {
-		return j.Op("*").Add(id)
-	}
-	return id
-}
-
-func (f *Field) JenString() *j.Statement {
-	fieldType := f.Type
-	var named bool
-	for {
-		switch typ := fieldType.(type) {
-		case *types.Alias:
-			fieldType = typ.Underlying()
-		case *types.Named:
-			for i := range typ.NumMethods() {
-				if strings.HasSuffix(typ.Method(i).String(), ".String() string") {
-					return f.Jen(false).Dot("String").Call()
-				}
-			}
-			named = true
-			fieldType = typ.Underlying()
-		default:
-			stmt := f.Jen()
-			if named {
-				stmt = j.Id(typ.String()).Parens(stmt)
-			}
-			return stmt
-		}
-	}
-}
-
-func returnErr(msg string, props Properties) *j.Statement {
-	var stmt *j.Statement
-	if props.Error != nil {
-		stmt = j.Id(*props.Error)
-	} else {
-		stmt = j.Lit(msg)
-	}
-	return j.Return(j.Qual(errorsPkg, "New").Call(stmt))
-}
-
-func qual(def string) *j.Statement {
-	path, ident := ParseDef(def)
-	if path == "" {
-		return j.Id(ident)
-	}
-	return j.Qual(path, ident)
-}
-
-func ParseDef(def string) (path, ident string) {
-	dotIdx := strings.LastIndexByte(def, '.')
-	if dotIdx == -1 {
-		return "", def
-	}
-	return def[:dotIdx], def[dotIdx+1:]
 }

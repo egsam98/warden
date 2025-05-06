@@ -7,65 +7,63 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	another "warden/_example/another"
 )
 
 var regexDataA = regexp.MustCompile("(.).,(.*)$")
 
 func (self *Data) Validate() error {
-	if self.A != nil {
-		if !regexDataA.MatchString(self.A.String()) {
-			return errors.New("must match regex (.).,(.*)$")
-		}
+	if !regexDataA.MatchString(self.A.String()) {
+		return errors.Errorf("must match regex (.).,(.*)$")
 	}
-	{
-		var zero *int
-		if self.B == zero {
-			return errors.New("required")
-		}
+	if self.B == nil {
+		return errors.Errorf("required")
 	}
 	if self.B != nil {
 		if err := validateB(*self.B); err != nil {
 			return err
 		}
 	}
-	{
-		var zero string
-		if self.C == zero {
-			return errors.New("required")
+	if self.B != nil {
+		if !slices.Contains([]int{another.Allo, 2, 3}, *self.B) {
+			return errors.Errorf("must be one of %v", []int{another.Allo, 2, 3})
 		}
 	}
+	if self.C == "" {
+		return errors.Errorf("required")
+	}
 	if _, err := url.Parse(self.C); err != nil {
-		return errors.New("must be URL")
+		return errors.Errorf("must be URL")
 	}
-	if !slices.Contains([]string{"Hello", "two", "three"}, self.C) {
-		return errors.New("must be one of [Hello two three]")
+	if !slices.Contains([]string{another.One, "two", "three"}, self.C) {
+		return errors.Errorf("must be one of %v", []string{another.One, "two", "three"})
 	}
-	if len(self.Arr) < 100 {
-		return errors.New("must have length 100 min")
+	if len(self.Arr) < another.Allo {
+		return errors.Errorf("must have length %v min", another.Allo)
 	}
 	if len(self.Arr) > 34 {
-		return errors.New("must have length 34 max")
+		return errors.Errorf("must have length %v max", 34)
 	}
 	for _, elem := range self.Arr {
 		if _, err := url.Parse(elem); err != nil {
-			return errors.New("must be URL")
+			return errors.Errorf("must be URL")
 		}
 	}
-	if self.Nested != nil {
-		if err := self.Nested.Validate(); err != nil {
-			return err
-		}
+	if err := self.Nested.Validate(); err != nil {
+		return err
+	}
+	if self.Nested == (Nested{}) {
+		return errors.Errorf("required")
+	}
+	if self.Time.IsZero() {
+		return errors.Errorf("required")
 	}
 	return nil
 }
 
 func (self *Nested) Validate() error {
-	{
-		var zero *string
-		if self.A == zero {
-			self.A = new(string)
-			*self.A = "allo da"
-		}
+	if self.A == "" {
+		self.A = "allo da"
 	}
 	return nil
 }
