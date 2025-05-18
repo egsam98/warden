@@ -93,7 +93,6 @@ func (p *Properties) parse(ctx *Context, v any) error {
 		return errors.Errorf("error property must be string, got %s", err)
 	}
 
-	delete(m, "each")
 	delete(m, "value")
 	delete(m, "error")
 	if len(m) > 0 {
@@ -117,11 +116,11 @@ func parseProperty(ctx *Context, src any) (Property, error) {
 		return parseProperty(ctx, int(src))
 	case string:
 		if match := regexVar.FindStringSubmatch(src); len(match) == 2 {
-			obj, local, err := ctx.findObject(match[1])
+			obj, err := ctx.findObject(match[1])
 			if err != nil {
 				return nil, err
 			}
-			return &Id{obj, local}, nil
+			return &Id{Object: obj, local: obj.Pkg().Path() == ctx.pkg.PkgPath}, nil
 		}
 	case []any:
 		props := make([]Property, len(src))

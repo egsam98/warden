@@ -3,49 +3,62 @@ package _example
 import (
 	"time"
 
-	"warden/_example/another"
+	an "github.com/egsam98/warden/_example/another"
 )
 
 const One = "one"
 
-type Data struct {
-	// [warden]
-	// regex = {value = "(.).,(.*)$"}
-	A another.Another
-	// [warden]
-	// required = true
-	// custom = { value = "id:validateB", method = false }
-	// oneof = ["id:warden/_example/another.Allo", 2, 3]
-	B *int
-	// [warden]
-	// required = true
-	// url = true
-	// oneof = ["id:warden/_example/another.One", "two", "three"]
-	C string
-	// [warden]
-	// length = { min = "id:warden/_example/another.Allo", max = 34 }
-	// [each]
-	// url = true
-	Arr []string
-	// [warden]
-	// required = true
-	// nested = true
-	Nested Nested
-	// [warden]
-	// required = true
-	Time time.Time
-}
-
-type Nested struct {
+type Data2 struct {
 	// [warden]
 	// default = "allo da"
 	A string
 }
 
-func validateB(b int) error {
-	return nil
+type Data struct {
+	// [warden]
+	// regex = "(.).,(.*)$"
+	A an.Another `json:"a"`
+	// [warden]
+	// required = true
+	// custom = { value = "id:validateB", method = false }
+	// oneof = ["id:github.com/egsam98/warden/_example/another.Allo", 2, 3]
+	B *int `json:"b"`
+	// [warden]
+	// required = true
+	// url = true
+	// oneof = ["id:github.com/egsam98/warden/_example/another.One", "two", "three"]
+	C string `json:"c,omitempty"`
+	// [warden]
+	// length = { min = "id:github.com/egsam98/warden/_example/another.Allo", max = 34 }
+	// [warden.dive]
+	// [warden.dive.dive]
+	// regex = "(.).,(.*)$"
+	// length = "id:github.com/egsam98/warden/_example/another.Allo"
+	// url = { value = true, error = "no url" }
+	Arr [][]string `json:"arr"`
+	// [warden]
+	// [warden.dive]
+	// [warden.dive.dive]
+	Arr2 []*Data2 `json:"arr2"`
+	// [warden]
+	// required = true
+	// [warden.dive]
+	Data2 *an.Struct `json:"data2"`
+	// [warden]
+	// [warden.dive]
+	Data3 struct {
+		// [warden]
+		// required = true
+		Test bool `json:"test"`
+	}
+	// [warden]
+	// required = true
+	Time time.Time `json:"time"`
+	// [warden]
+	// default = "30s"
+	Duration time.Duration
 }
 
-type Data2 struct {
-	Sometinh string
+func validateB(b int) error {
+	return nil
 }

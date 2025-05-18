@@ -9,3 +9,6 @@ install-tools: ## Install necessary tools for targets
 lint: ## Run linter
 	go mod tidy
 	golangci-lint run
+
+build: ## Build executable
+	go build -o $(GOPATH)/bin/warden cmd/warden/main.go

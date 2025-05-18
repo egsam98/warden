@@ -3,67 +3,108 @@
 package _example
 
 import (
-	errors "github.com/egsam98/errors"
+	"fmt"
+	warden "github.com/egsam98/warden"
+	another "github.com/egsam98/warden/_example/another"
 	"net/url"
 	"regexp"
 	"slices"
-	another "warden/_example/another"
+	"strconv"
 )
 
-var regexDataA = regexp.MustCompile("(.).,(.*)$")
+var regexData_aidnp = regexp.MustCompile("(.).,(.*)$")
+var regexData_frulh = regexp.MustCompile("(.).,(.*)$")
+
+func (self *Data2) Validate() error {
+	var errs warden.Errors
+	if self.A == "" {
+		self.A = "allo da"
+	}
+	return errs.AsError()
+}
 
 func (self *Data) Validate() error {
-	if !regexDataA.MatchString(self.A.String()) {
-		return errors.Errorf("must match regex (.).,(.*)$")
+	var errs warden.Errors
+	if !regexData_aidnp.MatchString(self.A.String()) {
+		errs.Add("a", warden.Error(fmt.Sprintf("must match regex %s", "(.).,(.*)$")))
 	}
 	if self.B == nil {
-		return errors.Errorf("required")
+		errs.Add("b", warden.Error("required"))
 	}
 	if self.B != nil {
 		if err := validateB(*self.B); err != nil {
-			return err
+			errs.Add("b", err)
 		}
 	}
 	if self.B != nil {
 		if !slices.Contains([]int{another.Allo, 2, 3}, *self.B) {
-			return errors.Errorf("must be one of %v", []int{another.Allo, 2, 3})
+			errs.Add("b", warden.Error(fmt.Sprintf("must be one of %v", []int{another.Allo, 2, 3})))
 		}
 	}
 	if self.C == "" {
-		return errors.Errorf("required")
+		errs.Add("c", warden.Error("required"))
 	}
 	if _, err := url.Parse(self.C); err != nil {
-		return errors.Errorf("must be URL")
+		errs.Add("c", warden.Error("must be URL"))
 	}
 	if !slices.Contains([]string{another.One, "two", "three"}, self.C) {
-		return errors.Errorf("must be one of %v", []string{another.One, "two", "three"})
+		errs.Add("c", warden.Error(fmt.Sprintf("must be one of %v", []string{another.One, "two", "three"})))
 	}
 	if len(self.Arr) < another.Allo {
-		return errors.Errorf("must have length %v min", another.Allo)
+		errs.Add("arr", warden.Error(fmt.Sprintf("must have length %v min", another.Allo)))
 	}
 	if len(self.Arr) > 34 {
-		return errors.Errorf("must have length %v max", 34)
+		errs.Add("arr", warden.Error(fmt.Sprintf("must have length %v max", 34)))
 	}
-	for _, elem := range self.Arr {
-		if _, err := url.Parse(elem); err != nil {
-			return errors.Errorf("must be URL")
+	errs.Add("arr", func() error {
+		var errs warden.Errors
+		for i, elem := range self.Arr {
+			errs.Add(strconv.Itoa(i), func() error {
+				var errs warden.Errors
+				for i, elem := range elem {
+					if !regexData_frulh.MatchString(elem) {
+						errs.Add(strconv.Itoa(i), warden.Error(fmt.Sprintf("must match regex %s", "(.).,(.*)$")))
+					}
+					if len(elem) != another.Allo {
+						errs.Add(strconv.Itoa(i), warden.Error(fmt.Sprintf("must have length: %v", another.Allo)))
+					}
+					if _, err := url.Parse(elem); err != nil {
+						errs.Add(strconv.Itoa(i), warden.Error("no url"))
+					}
+				}
+				return errs.AsError()
+			}())
 		}
+		return errs.AsError()
+	}())
+	errs.Add("arr2", func() error {
+		var errs warden.Errors
+		for i, elem := range self.Arr2 {
+			if elem != nil {
+				errs.Add(strconv.Itoa(i), elem.Validate())
+			}
+		}
+		return errs.AsError()
+	}())
+	if self.Data2 == nil {
+		errs.Add("data2", warden.Error("required"))
 	}
-	if err := self.Nested.Validate(); err != nil {
-		return err
+	if self.Data2 != nil {
+		errs.Add("data2", self.Data2.Validate())
 	}
-	if self.Nested == (Nested{}) {
-		return errors.Errorf("required")
-	}
+	errs.Add("Data3", func() error {
+		self := &self.Data3
+		var errs warden.Errors
+		if self.Test == false {
+			errs.Add("test", warden.Error("required"))
+		}
+		return errs.AsError()
+	}())
 	if self.Time.IsZero() {
-		return errors.Errorf("required")
+		errs.Add("time", warden.Error("required"))
 	}
-	return nil
-}
-
-func (self *Nested) Validate() error {
-	if self.A == "" {
-		self.A = "allo da"
+	if self.Duration == 0 {
+		self.Duration = 30000000000 // 30s
 	}
-	return nil
+	return errs.AsError()
 }
