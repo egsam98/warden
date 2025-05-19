@@ -2,8 +2,6 @@ module github.com/egsam98/warden
 
 go 1.23.0
 
-retract v0.1.0
-
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/dave/jennifer v1.7.1
