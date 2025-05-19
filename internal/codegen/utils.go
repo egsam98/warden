@@ -1,4 +1,4 @@
-package warden
+package codegen
 
 import (
 	"go/importer"
@@ -10,7 +10,7 @@ import (
 	"github.com/egsam98/errors"
 )
 
-func ReturnErr(field Field, props Properties, format string, args ...Property) *j.Statement {
+func returnErr(field Field, props Properties, format string, args ...Property) *j.Statement {
 	var stmtArgs []j.Code
 	if props.Error != nil {
 		stmtArgs = append(stmtArgs, j.Lit(*props.Error))
@@ -34,14 +34,14 @@ func ReturnErr(field Field, props Properties, format string, args ...Property) *
 	)
 }
 
-func Implements(typ types.Type, iface *types.Interface) bool {
+func implements(typ types.Type, iface *types.Interface) bool {
 	if _, ok := typ.(*types.Pointer); !ok {
 		typ = types.NewPointer(typ)
 	}
 	return types.Implements(typ, iface)
 }
 
-func ZeroValue(ctx *Context, typ types.Type) (*j.Statement, error) {
+func zeroValue(ctx *Context, typ types.Type) (*j.Statement, error) {
 	switch typ := typ.(type) {
 	case *types.Basic:
 		switch kind := typ.Kind(); kind {
@@ -61,7 +61,7 @@ func ZeroValue(ctx *Context, typ types.Type) (*j.Statement, error) {
 		return j.Nil(), nil
 	case *types.Array, *types.Struct:
 		return j.Id(typ.String()).Values(), nil
-	case namedOrAlias:
+	case NamedOrAlias:
 		under := typ.Underlying()
 		if _, ok := under.(*types.Struct); ok {
 			obj := typ.Obj()
@@ -71,13 +71,13 @@ func ZeroValue(ctx *Context, typ types.Type) (*j.Statement, error) {
 			}
 			return j.Parens(j.Qual(path, obj.Name()).Values()), nil
 		}
-		return ZeroValue(ctx, under)
+		return zeroValue(ctx, under)
 	default:
 		return nil, errors.Errorf("zeroValue: unexpected type: %T", typ)
 	}
 }
 
-func ImportStdInterface(path, name string) *types.Interface {
+func importStdInterface(path, name string) *types.Interface {
 	pkg, err := importer.Default().Import(path)
 	if err != nil {
 		panic(err)
@@ -97,7 +97,7 @@ func LinesFunc(f func(*j.Group)) *j.Statement {
 	return j.CustomFunc(j.Options{Separator: "\n"}, f)
 }
 
-func randString() string {
+func RandString() string {
 	var s strings.Builder
 	for range 5 {
 		s.WriteRune(rune(rand.N(122-97) + 97))

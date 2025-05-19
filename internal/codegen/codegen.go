@@ -1,4 +1,4 @@
-package warden
+package codegen
 
 import (
 	"bytes"
@@ -22,19 +22,19 @@ import (
 )
 
 const mod = "github.com/egsam98/warden"
-const tomlHeader = "[warden]"
+const tomlHeader = "warden"
 const genSuffix = "_gen.go"
 const maxDepth = 3
 
 var regexError = regexp.MustCompile(`^Error\s(\d+):\d+`)
 var regexVar = regexp.MustCompile(`id:([\w./]+)`)
 
-type namedOrAlias interface {
+type NamedOrAlias interface {
 	types.Type
 	Obj() *types.TypeName
 }
 
-func Parse(pkgs []*packages.Package, tag *string, depth ...int) error {
+func Gen(pkgs []*packages.Package, tag *string, depth ...int) error {
 	if len(pkgs) == 0 {
 		return errors.New("no packages found")
 	}
@@ -72,7 +72,7 @@ func Parse(pkgs []*packages.Package, tag *string, depth ...int) error {
 				importPkgs = append(importPkgs, pkg)
 			}
 			if len(importPkgs) > 0 {
-				if err := Parse(importPkgs, tag, _depth+1); err != nil {
+				if err := Gen(importPkgs, tag, _depth+1); err != nil {
 					return err
 				}
 			}
@@ -83,7 +83,7 @@ func Parse(pkgs []*packages.Package, tag *string, depth ...int) error {
 			if strings.HasSuffix(path, genSuffix) {
 				continue
 			}
-			if err := parseFile(pkgs, tag, pkg, path, file); err != nil {
+			if err := genFile(pkgs, tag, pkg, path, file); err != nil {
 				return err
 			}
 		}
@@ -96,7 +96,7 @@ type method struct {
 	Exprs []*j.Statement
 }
 
-func parseFile(pkgs []*packages.Package, tag *string, pkg *packages.Package, path string, file *ast.File) error {
+func genFile(pkgs []*packages.Package, tag *string, pkg *packages.Package, path string, file *ast.File) error {
 	gen := j.NewFile(pkg.Name)
 
 	var methods []method
@@ -119,7 +119,7 @@ func parseFile(pkgs []*packages.Package, tag *string, pkg *packages.Package, pat
 		}
 
 		ctx := Context{StructName: spec.Name.Name, pkg: pkg, pkgs: pkgs, tag: tag}
-		exprs, err := parseStruct(&ctx, structType)
+		exprs, err := genStruct(&ctx, structType)
 		if err != nil {
 			return errors.Wrap(err, "%s.%s", pkg.PkgPath, ctx.StructName)
 		}
@@ -187,14 +187,14 @@ func parseFile(pkgs []*packages.Package, tag *string, pkg *packages.Package, pat
 	return err
 }
 
-func parseStruct(ctx *Context, structType *ast.StructType) ([]*j.Statement, error) {
+func genStruct(ctx *Context, structType *ast.StructType) ([]*j.Statement, error) {
 	var exprs []*j.Statement
 	for _, field := range structType.Fields.List {
 		if field.Doc == nil {
 			continue
 		}
 		tomlStart := slices.IndexFunc(field.Doc.List, func(comm *ast.Comment) bool {
-			return strings.Trim(comm.Text, `/ `) == tomlHeader
+			return strings.Trim(comm.Text, `/ `) == "["+tomlHeader+"]"
 		})
 		if tomlStart == -1 {
 			continue
@@ -203,10 +203,15 @@ func parseStruct(ctx *Context, structType *ast.StructType) ([]*j.Statement, erro
 			return nil, errors.Errorf("multiple field names are unsupported: %v", field.Names)
 		}
 
-		m, err := omap.Decode(field.Doc.Text())
+		cfg, err := omap.Decode(field.Doc.Text())
 		if err != nil {
 			return nil, err
 		}
+		warden, ok := cfg.Get(tomlHeader)
+		if !ok {
+			return nil, errors.Errorf("main toml key %s isn't found", tomlHeader)
+		}
+		cfg = warden.(*omap.OrderedMap[any])
 
 		name := field.Names[0].Name
 		if ctx.tag != nil && field.Tag != nil {
@@ -221,12 +226,12 @@ func parseStruct(ctx *Context, structType *ast.StructType) ([]*j.Statement, erro
 
 		field := Field{
 			Self: true,
-			Id:   field.Names[0].Name,
+			ID:   field.Names[0].Name,
 			Name: j.Lit(name),
 			Type: ctx.pkg.TypesInfo.TypeOf(field.Type),
 			Expr: field.Type,
 		}
-		for key, value := range m.Range() {
+		for key, value := range cfg.Range() {
 			expr, err := genRules(ctx, field, key, value)
 			if err != nil {
 				return nil, err
@@ -258,7 +263,7 @@ type Context struct {
 	statics    []*j.Statement
 }
 
-func (c *Context) AddStatic(stmt *j.Statement) {
+func (c *Context) addStatic(stmt *j.Statement) {
 	c.statics = append(c.statics, stmt)
 }
 
@@ -298,13 +303,13 @@ func (c *Context) findObject(rawIdent string) (types.Object, error) {
 
 type Field struct {
 	Self, Deref bool
-	Id          string
+	ID          string
 	Name        *j.Statement
 	Type        types.Type
 	Expr        ast.Expr
 }
 
-func (f *Field) Gen(deref ...bool) *j.Statement {
+func (f *Field) gen(deref ...bool) *j.Statement {
 	_deref := true
 	if len(deref) > 0 {
 		_deref = deref[0]
@@ -312,9 +317,9 @@ func (f *Field) Gen(deref ...bool) *j.Statement {
 
 	var id *j.Statement
 	if f.Self {
-		id = j.Id("self." + f.Id)
+		id = j.Id("self." + f.ID)
 	} else {
-		id = j.Id(f.Id)
+		id = j.Id(f.ID)
 	}
 	if f.Deref && _deref {
 		return j.Op("*").Add(id)
@@ -322,7 +327,7 @@ func (f *Field) Gen(deref ...bool) *j.Statement {
 	return id
 }
 
-func (f *Field) GenString() *j.Statement {
+func (f *Field) genString() *j.Statement {
 	fieldType := f.Type
 	var named bool
 	for {
@@ -330,13 +335,13 @@ func (f *Field) GenString() *j.Statement {
 		case *types.Alias:
 			fieldType = typ.Underlying()
 		case *types.Named:
-			if Implements(typ, ifaceStringer) {
-				return f.Gen(false).Dot(ifaceStringer.Method(0).Name()).Call()
+			if implements(typ, ifaceStringer) {
+				return f.gen(false).Dot(ifaceStringer.Method(0).Name()).Call()
 			}
 			named = true
 			fieldType = typ.Underlying()
 		default:
-			stmt := f.Gen()
+			stmt := f.gen()
 			if named {
 				stmt = j.Id("string").Parens(stmt)
 			}

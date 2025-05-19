@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"github.com/egsam98/warden"
+	"github.com/egsam98/warden/internal/codegen"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return warden.Parse(pkgs, tag.value)
+	return codegen.Gen(pkgs, tag.value)
 }
 
 type stringPtr struct {

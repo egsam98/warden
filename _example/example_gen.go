@@ -12,8 +12,8 @@ import (
 	"strconv"
 )
 
-var regexData_aidnp = regexp.MustCompile("(.).,(.*)$")
-var regexData_frulh = regexp.MustCompile("(.).,(.*)$")
+var regexData_tqoli = regexp.MustCompile("(.).,(.*)$")
+var regexData_swrok = regexp.MustCompile("(.).,(.*)$")
 
 func (self *Data2) Validate() error {
 	var errs warden.Errors
@@ -25,7 +25,7 @@ func (self *Data2) Validate() error {
 
 func (self *Data) Validate() error {
 	var errs warden.Errors
-	if !regexData_aidnp.MatchString(self.A.String()) {
+	if !regexData_tqoli.MatchString(self.A.String()) {
 		errs.Add("a", warden.Error(fmt.Sprintf("must match regex %s", "(.).,(.*)$")))
 	}
 	if self.B == nil {
@@ -59,10 +59,13 @@ func (self *Data) Validate() error {
 	errs.Add("arr", func() error {
 		var errs warden.Errors
 		for i, elem := range self.Arr {
+			if len(elem) == 0 {
+				errs.Add(strconv.Itoa(i), warden.Error("must be non empty"))
+			}
 			errs.Add(strconv.Itoa(i), func() error {
 				var errs warden.Errors
 				for i, elem := range elem {
-					if !regexData_frulh.MatchString(elem) {
+					if !regexData_swrok.MatchString(elem) {
 						errs.Add(strconv.Itoa(i), warden.Error(fmt.Sprintf("must match regex %s", "(.).,(.*)$")))
 					}
 					if len(elem) != another.Allo {

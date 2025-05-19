@@ -31,6 +31,7 @@ type Data struct {
 	// [warden]
 	// length = { min = "id:github.com/egsam98/warden/_example/another.Allo", max = 34 }
 	// [warden.dive]
+	// non-empty = true
 	// [warden.dive.dive]
 	// regex = "(.).,(.*)$"
 	// length = "id:github.com/egsam98/warden/_example/another.Allo"

@@ -1,10 +1,12 @@
-package warden
+package codegen
 
 import (
 	"go/types"
 
 	j "github.com/dave/jennifer/jen"
 	"github.com/egsam98/errors"
+
+	"github.com/egsam98/warden/internal/omap"
 )
 
 type Property interface {
@@ -69,11 +71,11 @@ func (*List) implProperty() {}
 type Properties struct {
 	Value Property
 	Error *string
-	Other map[string]Property
+	Other omap.OrderedMap[Property]
 }
 
 func (p *Properties) parse(ctx *Context, v any) error {
-	m, ok := v.(map[string]any)
+	m, ok := v.(*omap.OrderedMap[any])
 	if !ok {
 		var err error
 		p.Value, err = parseProperty(ctx, v)
@@ -81,11 +83,12 @@ func (p *Properties) parse(ctx *Context, v any) error {
 	}
 
 	var err error
-	if p.Value, err = parseProperty(ctx, m["value"]); err != nil {
+	value, _ := m.Get("value")
+	if p.Value, err = parseProperty(ctx, value); err != nil {
 		return err
 	}
 
-	switch err := m["error"].(type) {
+	switch _error, _ := m.Get("error"); err := _error.(type) {
 	case nil:
 	case string:
 		p.Error = &err
@@ -93,16 +96,14 @@ func (p *Properties) parse(ctx *Context, v any) error {
 		return errors.Errorf("error property must be string, got %s", err)
 	}
 
-	delete(m, "value")
-	delete(m, "error")
-	if len(m) > 0 {
-		p.Other = make(map[string]Property, len(m))
-		for k, v := range m {
+	m.Del("value", "error")
+	if n := m.Len(); n > 0 {
+		for k, v := range m.Range() {
 			prop, err := parseProperty(ctx, v)
 			if err != nil {
 				return err
 			}
-			p.Other[k] = prop
+			p.Other.Set(k, prop)
 		}
 	}
 	return nil

@@ -1,4 +1,4 @@
-package warden
+package codegen
 
 import (
 	"fmt"
@@ -27,7 +27,7 @@ func init() {
 	}
 }
 
-var ifaceStringer = ImportStdInterface("fmt", "Stringer")
+var ifaceStringer = importStdInterface("fmt", "Stringer")
 var ifaceIsZero = types.NewInterfaceType([]*types.Func{
 	types.NewFunc(
 		0,
@@ -58,7 +58,7 @@ func (r *Rule) Render(
 		return nil, err
 	}
 	if isPtr && r.SkipNilPtr {
-		stmt = j.If(field.Gen(false).Op("!=").Nil()).Block(stmt)
+		stmt = j.If(field.gen(false).Op("!=").Nil()).Block(stmt)
 	}
 	return stmt, nil
 }
@@ -83,7 +83,7 @@ func dive(ctx *Context, field Field, props Properties, typ types.Type) (*j.State
 		if !ok {
 			return nil, errors.Errorf("expression must be *ast.StructType, got: %T", field.Expr)
 		}
-		exprs, err := parseStruct(ctx, structType)
+		exprs, err := genStruct(ctx, structType)
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +92,7 @@ func dive(ctx *Context, field Field, props Properties, typ types.Type) (*j.State
 			if !field.Deref {
 				self.Op("&")
 			}
-			self.Add(field.Gen(false))
+			self.Add(field.gen(false))
 
 			g.Add(self)
 			g.Var().Id("errs").Qual(mod, "Errors")
@@ -116,14 +116,14 @@ func dive(ctx *Context, field Field, props Properties, typ types.Type) (*j.State
 		eachField := Field{
 			Self:  false,
 			Deref: false,
-			Id:    "elem",
+			ID:    "elem",
 			Name:  j.Qual("strconv", "Itoa").Call(j.Id("i")),
 			Type:  innerType,
 			Expr:  innerExpr,
 		}
 
 		var eachExprs []*j.Statement
-		for ruleName, prop := range props.Other {
+		for ruleName, prop := range props.Other.Range() {
 			var props Properties
 			switch prop := prop.(type) {
 			case *Id, *List:
@@ -146,7 +146,7 @@ func dive(ctx *Context, field Field, props Properties, typ types.Type) (*j.State
 		}
 		return j.Func().Params().Error().Block(
 			j.Var().Id("errs").Qual(mod, "Errors"),
-			j.For().Id("i, elem").Op(":=").Range().Add(field.Gen()).BlockFunc(func(g *j.Group) {
+			j.For().Id("i, elem").Op(":=").Range().Add(field.gen()).BlockFunc(func(g *j.Group) {
 				for _, expr := range eachExprs {
 					g.Add(expr)
 				}
@@ -154,7 +154,7 @@ func dive(ctx *Context, field Field, props Properties, typ types.Type) (*j.State
 			j.Return(j.Id("errs").Dot("AsError").Call()),
 		).Call(), nil
 	case *types.Named:
-		return field.Gen(false).Dot("Validate").Call(), nil
+		return field.gen(false).Dot("Validate").Call(), nil
 	case *types.Alias:
 		return dive(ctx, field, props, typ.Underlying())
 	default:
@@ -171,7 +171,7 @@ func Required() Rule {
 			}
 			stmt, err := ifFieldZero(ctx, field)
 			return j.If(stmt).Block(
-				ReturnErr(field, props, "required"),
+				returnErr(field, props, "required"),
 			), err
 		},
 	}
@@ -181,7 +181,7 @@ func Default() Rule {
 	return Rule{
 		SkipNilPtr: false,
 		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
-			f := field.Gen()
+			f := field.gen()
 			stmt, err := ifFieldZero(ctx, field)
 			if err != nil {
 				return nil, err
@@ -236,11 +236,11 @@ func Default() Rule {
 }
 
 func ifFieldZero(ctx *Context, field Field) (*j.Statement, error) {
-	if _, isPtr := field.Type.(*types.Pointer); !isPtr && Implements(field.Type, ifaceIsZero) {
-		return field.Gen().Dot(ifaceIsZero.Method(0).Name()).Call(), nil
+	if _, isPtr := field.Type.(*types.Pointer); !isPtr && implements(field.Type, ifaceIsZero) {
+		return field.gen().Dot(ifaceIsZero.Method(0).Name()).Call(), nil
 	} else {
-		zeroVal, err := ZeroValue(ctx, field.Type)
-		return field.Gen().Op("==").Add(zeroVal), err
+		zeroVal, err := zeroValue(ctx, field.Type)
+		return field.gen().Op("==").Add(zeroVal), err
 	}
 }
 
@@ -252,10 +252,10 @@ func URL() Rule {
 				return j.Null(), nil
 			}
 
-			return j.If(j.Id("_").Op(",").Err().Op(":=").Qual("net/url", "Parse").Call(field.GenString())).
+			return j.If(j.Id("_").Op(",").Err().Op(":=").Qual("net/url", "Parse").Call(field.genString())).
 				Op(";").Err().Op("!=").Nil().
 				Block(
-					ReturnErr(field, props, "must be URL"),
+					returnErr(field, props, "must be URL"),
 				), nil
 		},
 	}
@@ -267,9 +267,9 @@ func OneOf() Rule {
 		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
 			return j.If(j.Op("!").
 				Qual("slices", "Contains").
-				Call(props.Value.Gen(), field.Gen())).
+				Call(props.Value.Gen(), field.gen())).
 				Block(
-					ReturnErr(field, props, "must be one of %v", props.Value),
+					returnErr(field, props, "must be one of %v", props.Value),
 				), nil
 		},
 	}
@@ -282,16 +282,17 @@ func Regex() Rule {
 			if props.Value == nil {
 				return nil, errors.New("value property is required")
 			}
-			regexID := j.Id(fmt.Sprintf("regex%s_%s", ctx.StructName, randString()))
-			ctx.AddStatic(
+
+			regexID := j.Id(fmt.Sprintf("regex%s_%s", ctx.StructName, RandString()))
+			ctx.addStatic(
 				j.Var().Add(regexID).Op("=").Qual("regexp", "MustCompile").Call(props.Value.Gen()),
 			)
 			return j.If(j.Op("!").
 				Add(regexID).
 				Dot("MatchString").
-				Call(field.GenString())).
+				Call(field.genString())).
 				Block(
-					ReturnErr(field, props, "must match regex %s", props.Value),
+					returnErr(field, props, "must match regex %s", props.Value),
 				), nil
 		},
 	}
@@ -302,20 +303,20 @@ func Length() Rule {
 		SkipNilPtr: true,
 		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
 			if props.Value != nil {
-				return j.If(j.Len(field.Gen()).Op("!=").Add(props.Value.Gen())).Block(
-					ReturnErr(field, props, "must have length: %v", props.Value),
+				return j.If(j.Len(field.gen()).Op("!=").Add(props.Value.Gen())).Block(
+					returnErr(field, props, "must have length: %v", props.Value),
 				), nil
 			}
 
 			return LinesFunc(func(g *j.Group) {
-				if minimum, ok := props.Other["min"]; ok {
-					g.If(j.Len(field.Gen()).Op("<").Add(minimum.Gen())).Block(
-						ReturnErr(field, props, "must have length %v min", minimum),
+				if minimum, ok := props.Other.Get("min"); ok {
+					g.If(j.Len(field.gen()).Op("<").Add(minimum.Gen())).Block(
+						returnErr(field, props, "must have length %v min", minimum),
 					)
 				}
-				if maximum, ok := props.Other["max"]; ok {
-					g.If(j.Len(field.Gen()).Op(">").Add(maximum.Gen())).Block(
-						ReturnErr(field, props, "must have length %v max", maximum),
+				if maximum, ok := props.Other.Get("max"); ok {
+					g.If(j.Len(field.gen()).Op(">").Add(maximum.Gen())).Block(
+						returnErr(field, props, "must have length %v max", maximum),
 					)
 				}
 			}), nil
@@ -327,8 +328,8 @@ func NonEmpty() Rule {
 	return Rule{
 		SkipNilPtr: true,
 		Do: func(ctx *Context, field Field, props Properties) (*j.Statement, error) {
-			return j.If(j.Len(field.Gen()).Op("==").Lit(0)).Block(
-				ReturnErr(field, props, "must be non empty"),
+			return j.If(j.Len(field.gen()).Op("==").Lit(0)).Block(
+				returnErr(field, props, "must be non empty"),
 			), nil
 		},
 	}
@@ -345,9 +346,9 @@ func ISO4217() Rule {
 				j.Id("code, _").
 					Op(":=").
 					Qual("github.com/rmg/iso4217", "ByName").
-					Call(field.GenString()).Op(";").Id("code").Op("==").Lit(0),
+					Call(field.genString()).Op(";").Id("code").Op("==").Lit(0),
 			).Block(
-				ReturnErr(field, props, "must be ISO4217 currency"),
+				returnErr(field, props, "must be ISO4217 currency"),
 			), nil
 		},
 	}
@@ -369,7 +370,7 @@ func Custom() Rule {
 			var stmt *j.Statement
 			sig := funcType.Signature()
 			if sig.Recv() != nil {
-				stmt = field.Gen().Dot(funcId.Name()).Call()
+				stmt = field.gen().Dot(funcId.Name()).Call()
 			} else {
 				firstParam := sig.Params().At(0)
 				if firstParam == nil {
@@ -380,11 +381,11 @@ func Custom() Rule {
 					_, isPtr := firstParam.Type().(*types.Pointer)
 					switch {
 					case field.Deref && isPtr, !field.Deref && !isPtr:
-						g.Add(field.Gen(false))
+						g.Add(field.gen(false))
 					case !field.Deref && isPtr:
-						g.Op("&").Add(field.Gen(false))
+						g.Op("&").Add(field.gen(false))
 					default:
-						g.Add(field.Gen())
+						g.Add(field.gen())
 					}
 				})
 			}
